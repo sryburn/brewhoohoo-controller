@@ -1,5 +1,5 @@
 /*
- * Project scottCustomNextion
+ * Project BrewHooHoo
  * Description:
  * Author:
  * Date:
@@ -18,6 +18,9 @@ int decaminutes;
 int minutes;
 int decaseconds;
 int seconds;
+
+int mode = 0;
+int prevMode = 0;
 
 bool timeToPublishWaveform = false;
 bool timeToPublishCountdown = false;
@@ -38,6 +41,10 @@ NexTouch settings = NexTouch(0,11,"b4");
 NexTouch *nex_listen_list[] =
 {
   &boil,
+  &mash,
+  &hlt,
+  &pump1,
+  &pump2,
   &countdown,
   &play,
   &restart,
@@ -54,6 +61,10 @@ void setup() {
   pinMode(D7, OUTPUT);
   boil.attachPush(boilPushCallback);
   boil.attachPop(boilPopCallback);
+  mash.attachPush(mashPushCallback);
+  hlt.attachPush(hltPushCallback);
+  pump1.attachPush(pump1PushCallback);
+  pump2.attachPush(pump2PushCallback);
   play.attachPush(playPushCallback);
   restart.attachPush(restartPushCallback);
   restart.attachPop(restartPopCallback);
@@ -65,9 +76,7 @@ void setup() {
 void loop() {
   listenForTouchEvents(nex_listen_list);
   if (timeToPublishWaveform==true){
-    Serial1.print("add 21,0,");
-    Serial1.print(counter);
-    terminateCommand();
+    updateChart(0,counter);
     timeToPublishWaveform = false;
   }
 
@@ -79,21 +88,51 @@ void loop() {
 
 //Callback Functions
 void boilPushCallback(void *ptr){
+    prevMode=mode;
+    mode=0;
+    resetMode();
     digitalWrite(D7, HIGH);
+    sendCommand("q0.picc=1");
 }
 
 void boilPopCallback(void *ptr){
     digitalWrite(D7, LOW);
 }
 
+void mashPushCallback(void *ptr){
+    prevMode=mode;
+    mode=1;
+    resetMode();
+    sendCommand("q1.picc=1");
+}
+
+void hltPushCallback(void *ptr){
+    prevMode=mode;
+    mode=2;
+    resetMode();
+    sendCommand("q2.picc=1");
+}
+
+void pump1PushCallback(void *ptr){
+    prevMode=mode;
+    mode=4;
+    resetMode();
+    sendCommand("q4.picc=1");
+}
+
+void pump2PushCallback(void *ptr){
+    prevMode=mode;
+    mode=5;
+    resetMode();
+    sendCommand("q5.picc=1");
+}
+
 void playPushCallback(void *ptr){
     if (countdownTimer.isActive()) {
-        Serial1.print("b3.picc=0");
-        terminateCommand();
+        sendCommand("b3.picc=0");
         countdownTimer.stop();
     } else{
-        Serial1.print("b3.picc=1");
-        terminateCommand();
+        sendCommand("b3.picc=1");
         countdownTimer.start();
     }
 }
@@ -105,7 +144,7 @@ void restartPushCallback(void *ptr){
 }
 
 void restartPopCallback(void *ptr){
-  Serial1.print("b1.picc=0");
+  sendCommand("b1.picc=0");
 }
 
 //Timer Functions
@@ -138,15 +177,9 @@ void resetTimer(){
   seconds = 0;
 }
 void renderCounter(){
-    Serial1.print("b2.txt=");
-    Serial1.print("\"");
-    Serial1.print(decaminutes);
-    Serial1.print(minutes);
-    Serial1.print(":");
-    Serial1.print(decaseconds);
-    Serial1.print(seconds);
-    Serial1.print("\"");
-    terminateCommand();
+    char clockText[20];
+    snprintf(clockText, sizeof(clockText), "b2.txt=\"%d%d:%d%d\"", decaminutes, minutes, decaseconds, seconds);
+    sendCommand(clockText);
 }
 
 //Helper Functions
@@ -157,6 +190,26 @@ void generateWaveform(){
         counter++;
     }
     timeToPublishWaveform = true;
+}
+
+void sendCommand(char *command){
+  Serial1.print(command);
+  terminateCommand();
+}
+
+void updateChart(int channel, int value){
+  Serial1.print("add 21,");
+  Serial1.print(channel);
+  Serial1.print(",");
+  Serial1.print(value);
+  terminateCommand();  
+}
+
+void resetMode(){
+  Serial1.print("q");
+  Serial1.print(prevMode);
+  Serial1.print(".picc=0");
+  terminateCommand();
 }
 
 void terminateCommand(){
