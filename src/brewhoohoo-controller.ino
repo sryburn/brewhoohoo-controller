@@ -211,7 +211,7 @@ void updateCountdownTimer(){
     // }
 }
 void resetTimer(){
-  decaminutes = 6;
+  decaminutes = 9;
   minutes = 0;
   decaseconds = 0;
   seconds = 0;
