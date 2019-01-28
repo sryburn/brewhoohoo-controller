@@ -1,18 +1,29 @@
-/*
- * Project BrewHooHoo
- * Description:
- * Author:
- * Date:
- */
-
 #include "Particle.h"
 #include "NextionBasic.h"
+#include "JsonParserGeneratorRK.h"
+#include "CountdownTimer.h"
+
+#define nexBoilSet 1
+#define nexMashSet 3
+#define nexHltSet 5
+#define nexPump1Set 8
+#define nexPump2Set 7
+#define nexBoilTemp 0
+#define nexMashTemp 2
+#define nexHltTemp 4
+#define nexCoilTemp 6
+
 
 SYSTEM_THREAD(ENABLED);
 
 Timer mockWaveform(2222, generateWaveform); //270 POINTS ON CHART * 2.22 = 10 MINUTES
-Timer countdownTimer(1000, updateCountdownTimer);
+
 Timer runDebounce(10, debounce);
+JsonParserStatic<1024, 50> parser;
+
+CountdownTimer countdownTimer;
+
+int counter; //for Mock Waveform
 
 int encoderA = D4;
 int encoderB = D5;
@@ -24,10 +35,13 @@ int boilElement = A2;
 int hltElement = A1;
 
 volatile int boilPower = 0; //mode0
-volatile double hltSet = 0; //mode1
-volatile double mashSet = 0; //mode2
+// volatile double boilSetpoint = 0; //Not implemented yet
+// volatile int hltPower = 0; //Not implemented yet
+volatile double hltSetpoint = 0; //mode1
+volatile double mashSetpoint = 0; //mode2
 volatile int pump1Power = 0; //mode4
 volatile int pump2Power = 0; //mode5
+
 volatile bool buttonPressed = false;
 volatile bool A_set = false;
 volatile bool B_set = false;
@@ -38,12 +52,6 @@ double coilTemp = 0.0;
 double hltTemp = 0.0;
 double boilElementState;
 double hltElementState;
-
-int counter;
-int decaminutes;
-int minutes;
-int decaseconds;
-int seconds;
 
 int mode = 0;
 int prevMode = 0;
@@ -58,7 +66,7 @@ unsigned long longPressTime = 2000;
 volatile bool debounced = true;
 
 bool timeToPublishWaveform = false;
-bool timeToPublishCountdown = false;
+
 
 //declare stuff that we receive from display
 NexTouch boilButton = NexTouch(0,22,"m0");
@@ -87,6 +95,7 @@ NexTouch *nex_listen_list[] =
 };
 
 void setup() {
+  Serial.begin();
   Serial1.begin(9600);
   sendCommand("baud=115200");
   delay(50);
@@ -103,27 +112,28 @@ void setup() {
   playButton.attachPush(playPushCallback);
   restartButton.attachPush(restartPushCallback);
   restartButton.attachPop(restartPopCallback);
-  resetTimer();
+  countdownTimer.reset();
   mockWaveform.start(); 
-  timeToPublishCountdown=true;
   attachInterrupts();
+  waitUntil(Mesh.ready);
+  Mesh.subscribe("status", renderUpdatedState);
 }
 
 void loop() {
   listenForTouchEvents(nex_listen_list);
   dealWithButtonPress();
-  renderUpdatedTemperatures(boilTemp, hltTemp, mashTemp, coilTemp);
-  renderUpdatedSetpoints(boilPower, hltSet, pump1Power, pump2Power);
+  // renderUpdatedTemperatures(boilTemp, hltTemp, mashTemp, coilTemp); //TODO move to subscribe event
+  publishUpdatedSetpoints(boilPower, mashSetpoint, hltSetpoint, pump1Power, pump2Power);
   
   if (timeToPublishWaveform==true){
     updateChart(0,counter);
     timeToPublishWaveform = false;
   }
 
-  if (timeToPublishCountdown==true){
-      renderCounter();
-      timeToPublishCountdown = false;
+  if (countdownTimer.hasUpdated() == true){
+    sendCommand(countdownTimer.getClockText());
   }
+
 }
 
 //Callback Functions
@@ -168,7 +178,7 @@ void pump2PushCallback(void *ptr){
 }
 
 void playPushCallback(void *ptr){
-    if (countdownTimer.isActive()) {
+    if (countdownTimer.active()) {
         sendCommand("b3.picc=0");
         countdownTimer.stop();
     } else{
@@ -178,49 +188,16 @@ void playPushCallback(void *ptr){
 }
 
 void restartPushCallback(void *ptr){
-    resetTimer();
-    renderCounter();
-    // Serial1.print("b1.picc=1");
+    countdownTimer.reset();  
+    sendCommand(countdownTimer.getClockText());
+    sendCommand("b1.picc=1");
 }
 
 void restartPopCallback(void *ptr){
   sendCommand("b1.picc=0");
 }
 
-//Timer Functions
-void updateCountdownTimer(){
-    // if (decaminutes==0&&minutes==0&&decaseconds==0&&seconds==0){
-    //     countdown.setText("ALARM");
-    // } else{
-        if (seconds>0){
-            seconds--;
-        } else if (decaseconds>0){
-            decaseconds--;
-            seconds=9;
-        } else if (minutes>0){
-            minutes--;
-            decaseconds=5;
-            seconds=9;
-        } else if (decaminutes>0){
-            decaminutes--;
-            minutes=9;
-            decaseconds=5;
-            seconds=9;
-        }
-    timeToPublishCountdown = true;
-    // }
-}
-void resetTimer(){
-  decaminutes = 9;
-  minutes = 0;
-  decaseconds = 0;
-  seconds = 0;
-}
-void renderCounter(){
-    char clockText[20];
-    snprintf(clockText, sizeof(clockText), "b2.txt=\"%d%d:%d%d\"", decaminutes, minutes, decaseconds, seconds);
-    sendCommand(clockText);
-}
+
 
 void debounce(){
     debounced = true;
@@ -249,7 +226,7 @@ void updateChart(int channel, int value){
   terminateCommand();  
 }
 
-void updateTextInteger(int id, int value){
+void updateText(int id, int value){
   Serial1.print("t");
   Serial1.print(id);
   Serial1.print(".txt=\"");
@@ -258,7 +235,7 @@ void updateTextInteger(int id, int value){
   terminateCommand();  
 }
 
-void updateTextDouble(int id, double value){
+void updateText(int id, double value){
   Serial1.print("t");
   Serial1.print(id);
   Serial1.print(".txt=\"");
@@ -267,7 +244,7 @@ void updateTextDouble(int id, double value){
   terminateCommand();  
 }
 
-void updateTextString(int id, const char *string){
+void updateText(int id, const char *string){
   Serial1.print("t");
   Serial1.print(id);
   Serial1.print(".txt=\"");
@@ -283,58 +260,166 @@ void renderUpdatedTemperatures(double boilTemp, double hltTemp, double coilTemp,
     static double prevHltTemp;
 
     if  (!is_equal_3decplaces(boilTemp, prevBoilTemp)){
-      updateTextDouble(0,boilTemp);
+      updateText(nexBoilTemp,boilTemp);
       prevBoilTemp = boilTemp;
     }
 
     if  (!is_equal_3decplaces(mashTemp, prevMashTemp)){
-      updateTextDouble(2,mashTemp);
+      updateText(nexMashTemp,mashTemp);
       prevMashTemp = mashTemp;
     }
 
     if  (!is_equal_3decplaces(hltTemp, prevHltTemp)){
-      updateTextDouble(4,hltTemp);
+      updateText(nexHltTemp,hltTemp);
       prevHltTemp = hltTemp;
     }
 
     if  (!is_equal_3decplaces(coilTemp, prevCoilTemp)){
-      updateTextDouble(6,coilTemp);
+      updateText(nexCoilTemp,coilTemp);
       prevCoilTemp = coilTemp;
     }
 }
 
-void renderUpdatedSetpoints(int boilPower, double hltSet, int pump1Power, int pump2Power){
-    static int prevBoilPower = -1;
-    static double prevHltSet = -1;
-    static double prevMashSet = -1;
-    static int prevPump2Power = -1;
-    static int prevPump1Power = -1;
+void renderUpdatedState(const char *event, const char *data){
+  parser.clear();
+  parser.addString(data);
+  parser.parse();
+
+  static int bsBoilPower;
+  static double bsBoilSetpoint;
+  static double bsMashSetpoint;
+  static int bsHltPower;
+  static double bsHltSetpoint;
+  static int bsPump1Power;
+  static int bsPump2Power;
+  static double bsMashTemp;
+  static double bsBoilTemp;
+  static double bsCoilTemp;
+  static double bshHltTemp;
+  static bool bsBoilElementOn;
+  static bool bsHltElementOn;
+  static int bsBoilMode;
+  static int bsHltMode;
+  static char bsCountdownTime[5];
+  static int bsTimerState;
+  static int bsCloudStatus;
+  static int bsMeshStatus;
+  static double bsBatteryVoltage;
+
+  static int prevBsBoilPower;
+  static double prevBsBoilSetpoint;
+  static double prevBsMashSetpoint;
+  static int prevBsHltPower;
+  static double prevBsHltSetpoint;
+  static int prevBsPump1Power;
+  static int prevBsPump2Power;
+  static double prevBsMashTemp;
+  static double prevBsBoilTemp;
+  static double prevBsCoilTemp;
+  static double prevBshHltTemp;
+  static bool prevBsBoilElementOn;
+  static bool prevBsHltElementOn;
+  static int prevBsBoilMode;
+  static int prevBsHltMode;
+  static char prevBsCountdownTime[5];
+  static int prevBsTimerState;
+  static int prevBsCloudStatus;
+  static int prevBsMeshStatus;
+  static double prevBsBatteryVoltage;
+  
+  parser.getOuterValueByKey("boilPower", bsBoilPower);
+  parser.getOuterValueByKey("mashSetpoint", bsMashSetpoint);
+  parser.getOuterValueByKey("hltSetpoint", bsHltSetpoint);
+  parser.getOuterValueByKey("pump1Power", bsPump1Power);
+  parser.getOuterValueByKey("pump2Power", bsPump2Power);
+
+  if (bsBoilPower != prevBsBoilPower){ 
+    updateText(nexBoilSet,bsBoilPower);
+    prevBsBoilPower = bsBoilPower;
+  }
+
+  if (bsMashSetpoint != prevBsMashSetpoint){ 
+    if (bsMashSetpoint == -1){
+      updateText(nexMashSet, "__._");
+    } else {
+      updateText(nexMashSet,bsMashSetpoint);
+    }
+    prevBsMashSetpoint = bsMashSetpoint;
+  }
+
+  if (bsHltSetpoint != prevBsHltSetpoint){
+    if (bsHltSetpoint == -1){
+      updateText(nexHltSet,"__._");
+    } else{
+      updateText(nexHltSet,bsHltSetpoint);
+    }
+    prevBsHltSetpoint = bsHltSetpoint;
+  }
+
+  if (bsPump1Power != prevBsPump1Power){ 
+    updateText(nexPump1Set,bsPump1Power);
+    prevBsPump1Power = bsPump1Power;
+  }
+
+  if (bsPump2Power != prevBsPump2Power){ 
+    updateText(nexPump2Set,bsPump2Power);
+    prevBsPump2Power = bsPump2Power;
+  }
+
+  
+
+}
+
+void publishUpdatedSetpoints(int boilPower, double mashSetpoint, double hltSetpoint, int pump1Power, int pump2Power){
+    static int prevBoilPower;
+    static double prevHltSetpoint;
+    static double prevMashSetpoint;
+    static int prevPump2Power;
+    static int prevPump1Power;
 
     if (boilPower != prevBoilPower){
-        updateTextInteger(1,boilPower);
-        prevBoilPower = boilPower;
+      char publishString[10];
+      sprintf(publishString,"%d",boilPower);
+      Mesh.publish("setBoilPower", publishString);
+      prevBoilPower = boilPower;
     }
     
-    if (mashSet != prevMashSet){
-        updateTextDouble(3,mashSet);
-        prevMashSet = mashSet;
-        updateTextString(5,"__._");
+    if (mashSetpoint != prevMashSetpoint){
+      char publishString[10];
+      sprintf(publishString,"%f",mashSetpoint);
+      Mesh.publish("setMashSetpoint", publishString);
+      prevMashSetpoint = mashSetpoint;
+      // updateText(3,mashSetpoint);
+      // prevMashSetpoint = mashSetpoint;
+      // updateText(5,"__._");
     }
 
-    if (hltSet != prevHltSet){
-        updateTextDouble(5,hltSet);
-        prevHltSet = hltSet;
-        updateTextString(3,"__._");
-    }
-
-    if (pump2Power != prevPump2Power){
-        updateTextInteger(7,pump2Power);
-        prevPump2Power = pump2Power;
+    if (hltSetpoint != prevHltSetpoint){
+      char publishString[10];
+      sprintf(publishString,"%f",hltSetpoint);
+      Mesh.publish("setHltSetpoint", publishString);
+      prevHltSetpoint = hltSetpoint;
+      // updateText(5,hltSetpoint);
+      // prevHltSetpoint = hltSetpoint;
+      // updateText(3,"__._");
     }
 
     if (pump1Power != prevPump1Power){
-        updateTextInteger(8,pump1Power);
-        prevPump1Power = pump1Power;
+      char publishString[10];
+      sprintf(publishString,"%d",pump1Power);
+      Mesh.publish("setPump1Power", publishString);
+      prevPump1Power = pump1Power;
+      // updateText(8,pump1Power);
+      // prevPump1Power = pump1Power;
+    }
+
+    if (pump2Power != prevPump2Power){
+      char publishString[10];
+      sprintf(publishString,"%d",pump2Power);
+      Mesh.publish("setPump2Power", publishString);
+      prevPump2Power = pump2Power;
+      // updateText(7,pump2Power);
+      // prevPump2Power = pump2Power;
     }
 }
 
@@ -367,7 +452,7 @@ void terminateCommand(){
 }
 
 void attachInterrupts(){
-    attachInterrupt(button, setButtonPressed, RISING);
+    attachInterrupt(button, setButtonPressed, FALLING);
     attachInterrupt(encoderA, doEncoderA, CHANGE);
     attachInterrupt(encoderB, doEncoderB, CHANGE);
 }
@@ -392,13 +477,13 @@ void dealWithButtonPress(){
       break;
 
       case 1:
-      if (mashSet > 0){mashSet = 0;}
-      else {mashSet = 70;}
+      if (mashSetpoint > 0){mashSetpoint = 0;}
+      else {mashSetpoint = 70;}
       break;
 
       case 2:
-      if (hltSet > 0){hltSet = 0;}
-      else {hltSet = 70;}
+      if (hltSetpoint > 0){hltSetpoint = 0;}
+      else {hltSetpoint = 70;}
       break;
 
       case 4:
@@ -429,10 +514,10 @@ void doEncoderA() {
     if (A_set && !B_set && debounced){
       if (mode == 0 && boilPower < 100){
           boilPower += 1;
-      } else if (mode == 1 && mashSet < 100){
-          mashSet += 0.1;
-      } else if (mode == 2 && hltSet < 100){
-          hltSet += 0.1;
+      } else if (mode == 1 && mashSetpoint < 100){
+          mashSetpoint += 0.1;
+      } else if (mode == 2 && hltSetpoint < 100){
+          hltSetpoint += 0.1;
       } else if (mode == 4 && pump2Power < 100){
           pump2Power += 1;
       } else if (mode == 5 && pump1Power < 100){
@@ -450,10 +535,10 @@ void doEncoderB() {
         if(B_set && !A_set && debounced){
           if (mode == 0 && boilPower > 0){
               boilPower -= 1;
-          } else if (mode == 1 && mashSet > 0.05){
-              mashSet -= 0.1;
-          } else if (mode == 2 && hltSet > 0.05){
-              hltSet -= 0.1;
+          } else if (mode == 1 && mashSetpoint > 0.05){
+              mashSetpoint -= 0.1;
+          } else if (mode == 2 && hltSetpoint > 0.05){
+              hltSetpoint -= 0.1;
           } else if (mode == 4 && pump2Power > 0){
               pump2Power -= 1;
           } else if (mode == 5 && pump1Power > 0){
