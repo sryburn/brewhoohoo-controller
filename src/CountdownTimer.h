@@ -4,13 +4,13 @@
 class CountdownTimer 
 {
   public:
-    void start();
-    void stop();
-    void reset();
-    bool active();
+    static void start();  //added static
+    static void stop(); //added static
+    static void reset();//added static
+    static bool active();//added static
     void countdown();
     bool hasUpdated();
-    const char* getClockText() const;  
+    static const char* getClockText();  //added static, removed trailing char
 
   private:
     //these are static as the countdown method is called from a separate timer instance

@@ -67,7 +67,7 @@ bool CountdownTimer::hasUpdated(){
   }
 }
 
-const char* CountdownTimer::getClockText() const
+const char* CountdownTimer::getClockText()
 {
   return clockText;
 }
