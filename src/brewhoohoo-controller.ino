@@ -1,8 +1,8 @@
 #include "Particle.h"
 #include "JsonParserGeneratorRK.h"
 #include "Touchscreen.h"
-#include "CountdownTimer.h"
 #include "RotaryEncoder.h"
+#include "State.h"
 
 #define nexBoilSet 1
 #define nexMashSet 3
@@ -13,30 +13,12 @@
 #define nexMashTemp 2
 #define nexHltTemp 4
 #define nexCoilTemp 6
+#define nexClock 
 
 SYSTEM_THREAD(ENABLED);
 JsonParserStatic<1024, 50> parser;
-CountdownTimer countdownTimer;
 Touchscreen touchscreen;
-
-int mode = 0;
-
-volatile int boilPower = 0; //mode0
-// volatile double boilSetpoint = 0; //Not implemented yet
-// volatile int hltPower = 0; //Not implemented yet
-volatile double hltSetpoint = 0; //mode1
-volatile double mashSetpoint = 0; //mode2
-volatile int pump1Power = 0; //mode4
-volatile int pump2Power = 0; //mode5
-
-double mashTemp = 0.0;
-double boilTemp = 0.0;
-double coilTemp = 0.0;
-double hltTemp = 0.0;
-double boilElementState;
-double hltElementState;
-
-bool timeToPublishFlag = false;
+DeviceState dState;
 
 void setup() {
   Serial.begin();
@@ -47,7 +29,6 @@ void setup() {
   Serial1.begin(115200);
   setupEncoder();
   touchscreen.attachCallbacks();
-  countdownTimer.reset();
   attachInterrupts();
   waitUntil(Mesh.ready);
   Mesh.subscribe("status", renderUpdatedState);
@@ -56,39 +37,7 @@ void setup() {
 void loop() {
   touchscreen.checkForTouchEvents();
   dealWithButtonPress();
-  // renderUpdatedTemperatures(boilTemp, hltTemp, mashTemp, coilTemp); //TODO move to subscribe event
-  publishUpdatedSetpoints(boilPower, mashSetpoint, hltSetpoint, pump1Power, pump2Power);
-
-  if (countdownTimer.hasUpdated() == true){
-    touchscreen.sendCommand(countdownTimer.getClockText());
-  }
-}
-
-void renderUpdatedTemperatures(double boilTemp, double hltTemp, double coilTemp, double mashTemp){
-    static double prevMashTemp;
-    static double prevBoilTemp;
-    static double prevCoilTemp;
-    static double prevHltTemp;
-
-    if  (!is_equal_3decplaces(boilTemp, prevBoilTemp)){
-      touchscreen.updateText(nexBoilTemp,boilTemp);
-      prevBoilTemp = boilTemp;
-    }
-
-    if  (!is_equal_3decplaces(mashTemp, prevMashTemp)){
-      touchscreen.updateText(nexMashTemp,mashTemp);
-      prevMashTemp = mashTemp;
-    }
-
-    if  (!is_equal_3decplaces(hltTemp, prevHltTemp)){
-      touchscreen.updateText(nexHltTemp,hltTemp);
-      prevHltTemp = hltTemp;
-    }
-
-    if  (!is_equal_3decplaces(coilTemp, prevCoilTemp)){
-      touchscreen.updateText(nexCoilTemp,coilTemp);
-      prevCoilTemp = coilTemp;
-    }
+  publishUpdatedSetpoints(dState);
 }
 
 void renderUpdatedState(const char *event, const char *data){
@@ -96,128 +45,129 @@ void renderUpdatedState(const char *event, const char *data){
   parser.addString(data);
   parser.parse();
 
-  static int bsBoilPower;
- // static double bsBoilSetpoint;
-  static double bsMashSetpoint;
- // static int bsHltPower;
-  static double bsHltSetpoint;
-  static int bsPump1Power;
-  static int bsPump2Power;
-  // static double bsMashTemp;
-  // static double bsBoilTemp;
-  // static double bsCoilTemp;
-  // static double bshHltTemp;
-  // static bool bsBoilElementOn;
-  // static bool bsHltElementOn;
-  // static int bsBoilMode;
-  // static int bsHltMode;
-  // static char bsCountdownTime[5];
-  // static int bsTimerState;
-  // static int bsCloudStatus;
-  // static int bsMeshStatus;
-  // static double bsBatteryVoltage;
+  static SystemState state;
+  static SystemState prevState;
+ 
+  parser.getOuterValueByKey("boilPower", state.boilPower);
+  parser.getOuterValueByKey("mashSetpoint", state.mashSetpoint);
+  parser.getOuterValueByKey("hltSetpoint", state.hltSetpoint);
+  parser.getOuterValueByKey("pump1Power", state.pump1Power);
+  parser.getOuterValueByKey("pump2Power", state.pump2Power);
+  parser.getOuterValueByKey("boilTemp", state.boilTemp);
+  parser.getOuterValueByKey("mashTemp", state.mashTemp);
+  parser.getOuterValueByKey("hltTemp", state.hltTemp);
+  parser.getOuterValueByKey("coilTemp", state.coilTemp);
+  parser.getOuterValueByKey("countdownTime", state.countdownTime);
+  parser.getOuterValueByKey("timerStarted", state.timerStarted);
 
-  static int prevBsBoilPower;
-//  static double prevBsBoilSetpoint;
-  static double prevBsMashSetpoint;
-//  static int prevBsHltPower;
-  static double prevBsHltSetpoint;
-  static int prevBsPump1Power;
-  static int prevBsPump2Power;
-  // static double prevBsMashTemp;
-  // static double prevBsBoilTemp;
-  // static double prevBsCoilTemp;
-  // static double prevBshHltTemp;
-  // static bool prevBsBoilElementOn;
-  // static bool prevBsHltElementOn;
-  // static int prevBsBoilMode;
-  // static int prevBsHltMode;
-  // static char prevBsCountdownTime[5];
-  // static int prevBsTimerState;
-  // static int prevBsCloudStatus;
-  // static int prevBsMeshStatus;
-  // static double prevBsBatteryVoltage;
-  
-  parser.getOuterValueByKey("boilPower", bsBoilPower);
-  parser.getOuterValueByKey("mashSetpoint", bsMashSetpoint);
-  parser.getOuterValueByKey("hltSetpoint", bsHltSetpoint);
-  parser.getOuterValueByKey("pump1Power", bsPump1Power);
-  parser.getOuterValueByKey("pump2Power", bsPump2Power);
-
-  if (bsBoilPower != prevBsBoilPower){ 
-    touchscreen.updateText(nexBoilSet,bsBoilPower);
-    prevBsBoilPower = bsBoilPower;
+  if (state.timerStarted != prevState.timerStarted){
+    if (state.timerStarted){
+      touchscreen.sendCommand("b3.picc=1");
+    } else{
+      touchscreen.sendCommand("b3.picc=0");
+    }
+    prevState.timerStarted = state.timerStarted;
   }
 
-  if (bsMashSetpoint != prevBsMashSetpoint){ 
-    if (bsMashSetpoint == -1){
+  if (state.countdownTime != prevState.countdownTime){ 
+    touchscreen.updateClock(state.countdownTime);
+    prevState.countdownTime = state.countdownTime;
+  }
+
+  if (state.boilPower != prevState.boilPower){ 
+    touchscreen.updateText(nexBoilSet,state.boilPower);
+    prevState.boilPower = state.boilPower;
+  }
+
+  if (state.mashSetpoint != prevState.mashSetpoint){ 
+    if (state.mashSetpoint == -1){
       touchscreen.updateText(nexMashSet, "__._");
     } else {
-      touchscreen.updateText(nexMashSet,bsMashSetpoint);
+      touchscreen.updateText(nexMashSet,state.mashSetpoint);
     }
-    prevBsMashSetpoint = bsMashSetpoint;
+    prevState.mashSetpoint = state.mashSetpoint;
   }
 
-  if (bsHltSetpoint != prevBsHltSetpoint){
-    if (bsHltSetpoint == -1){
+  if (state.hltSetpoint != prevState.hltSetpoint){
+    if (state.hltSetpoint == -1){
       touchscreen.updateText(nexHltSet,"__._");
     } else{
-      touchscreen.updateText(nexHltSet,bsHltSetpoint);
+      touchscreen.updateText(nexHltSet,state.hltSetpoint);
     }
-    prevBsHltSetpoint = bsHltSetpoint;
+    prevState.hltSetpoint = state.hltSetpoint;
   }
 
-  if (bsPump1Power != prevBsPump1Power){ 
-    touchscreen.updateText(nexPump1Set,bsPump1Power);
-    prevBsPump1Power = bsPump1Power;
+  if (state.pump1Power != prevState.pump1Power){ 
+    touchscreen.updateText(nexPump1Set,state.pump1Power);
+    prevState.pump1Power = state.pump1Power;
   }
 
-  if (bsPump2Power != prevBsPump2Power){ 
-    touchscreen.updateText(nexPump2Set,bsPump2Power);
-    prevBsPump2Power = bsPump2Power;
+  if (state.pump2Power != prevState.pump2Power){ 
+    touchscreen.updateText(nexPump2Set,state.pump2Power);
+    prevState.pump2Power = state.pump2Power;
+  }
+
+  if (!is_equal_3decplaces(state.boilTemp, prevState.boilTemp)){
+    touchscreen.updateText(nexBoilTemp,state.boilTemp);
+    prevState.boilTemp = state.boilTemp;
+  }
+
+  if (!is_equal_3decplaces(state.mashTemp, prevState.mashTemp)){
+    touchscreen.updateText(nexMashTemp,state.mashTemp);
+    prevState.mashTemp = state.mashTemp;
+  }
+
+  if (!is_equal_3decplaces(state.hltTemp, prevState.hltTemp)){
+    touchscreen.updateText(nexHltTemp,state.hltTemp);
+    prevState.hltTemp = state.hltTemp;
+  }
+
+  if (!is_equal_3decplaces(state.coilTemp, prevState.coilTemp)){
+    touchscreen.updateText(nexCoilTemp,state.coilTemp);
+    prevState.coilTemp = state.coilTemp;
   }
 }
 
-void publishUpdatedSetpoints(int boilPower, double mashSetpoint, double hltSetpoint, int pump1Power, int pump2Power){
+void publishUpdatedSetpoints(DeviceState &dState){
     static int prevBoilPower;
     static double prevHltSetpoint;
     static double prevMashSetpoint;
     static int prevPump2Power;
     static int prevPump1Power;
 
-    if (boilPower != prevBoilPower){
+    if (dState.boilPower != prevBoilPower){
       char publishString[10];
-      sprintf(publishString,"%d",boilPower);
+      sprintf(publishString,"%d",dState.boilPower);
       Mesh.publish("setBoilPower", publishString);
-      prevBoilPower = boilPower;
+      prevBoilPower = dState.boilPower;
     }
     
-    if (mashSetpoint != prevMashSetpoint){
+    if (dState.mashSetpoint != prevMashSetpoint){
       char publishString[10];
-      sprintf(publishString,"%f",mashSetpoint);
+      sprintf(publishString,"%f",dState.mashSetpoint);
       Mesh.publish("setMashSetpoint", publishString);
-      prevMashSetpoint = mashSetpoint;
+      prevMashSetpoint = dState.mashSetpoint;
     }
 
-    if (hltSetpoint != prevHltSetpoint){
+    if (dState.hltSetpoint != prevHltSetpoint){
       char publishString[10];
-      sprintf(publishString,"%f",hltSetpoint);
+      sprintf(publishString,"%f",dState.hltSetpoint);
       Mesh.publish("setHltSetpoint", publishString);
-      prevHltSetpoint = hltSetpoint;
+      prevHltSetpoint = dState.hltSetpoint;
      }
 
-    if (pump1Power != prevPump1Power){
+    if (dState.pump1Power != prevPump1Power){
       char publishString[10];
-      sprintf(publishString,"%d",pump1Power);
+      sprintf(publishString,"%d",dState.pump1Power);
       Mesh.publish("setPump1Power", publishString);
-      prevPump1Power = pump1Power;
+      prevPump1Power = dState.pump1Power;
     }
 
-    if (pump2Power != prevPump2Power){
+    if (dState.pump2Power != prevPump2Power){
       char publishString[10];
-      sprintf(publishString,"%d",pump2Power);
+      sprintf(publishString,"%d",dState.pump2Power);
       Mesh.publish("setPump2Power", publishString);
-      prevPump2Power = pump2Power;
+      prevPump2Power = dState.pump2Power;
     }
 }
 

@@ -1,8 +1,9 @@
 #ifndef Touchscreen_h
 #define Touchscreen_h
 #include "NextionBasic.h"
+#include "State.h"
 
-extern int mode;
+extern DeviceState dState;
 
 class Touchscreen 
 {
@@ -10,6 +11,7 @@ class Touchscreen
   void attachCallbacks();
   void checkForTouchEvents();
   void updateChart(int channel, int value);
+  void updateClock(const char *clock);
   void updateText(int id, int value);
   void updateText(int id, double value);
   void updateText(int id, const char *string);
@@ -27,7 +29,6 @@ class Touchscreen
 
 
   private:
-  int counter; //for Mock Waveform
   bool timeToPublishWaveform;
   static void resetMode();
   static int prevMode;

@@ -1,8 +1,5 @@
 #include "Touchscreen.h"
 #include "application.h"
-#include "CountdownTimer.h"
-
-CountdownTimer countdown;
 
 int Touchscreen::prevMode = 0;
 
@@ -51,6 +48,13 @@ void Touchscreen::updateChart(int channel, int value){
   terminateCommand();  
 }
 
+void Touchscreen::updateClock(const char *clock){
+  Serial1.print("b2.txt=\"");
+  Serial1.print(clock);
+  Serial1.print("\"");
+  terminateCommand();  
+}
+
 void Touchscreen::updateText(int id, int value){
   Serial1.print("t");
   Serial1.print(id);
@@ -95,8 +99,8 @@ void Touchscreen::resetMode(){
 }
 
 void Touchscreen::boilPushCallback(void *ptr){
-    prevMode=mode;
-    mode=0;
+    prevMode=dState.mode;
+    dState.mode=0;
     resetMode();
     digitalWrite(D7, HIGH);
     sendCommand("q0.picc=1");
@@ -107,46 +111,46 @@ void Touchscreen::boilPopCallback(void *ptr){
 }
 
 void Touchscreen::mashPushCallback(void *ptr){
-    prevMode=mode;
-    mode=1;
+    prevMode=dState.mode;
+    dState.mode=1;
     resetMode();
     sendCommand("q1.picc=1");
 }
 
 void Touchscreen::hltPushCallback(void *ptr){
-    prevMode=mode;
-    mode=2;
+    prevMode=dState.mode;
+    dState.mode=2;
     resetMode();
     sendCommand("q2.picc=1");
 }
 
 void Touchscreen::pump1PushCallback(void *ptr){
-    prevMode=mode;
-    mode=4;
+    prevMode=dState.mode;
+    dState.mode=4;
     resetMode();
     sendCommand("q4.picc=1");
 }
 
 void Touchscreen::pump2PushCallback(void *ptr){
-    prevMode=mode;
-    mode=5;
+    prevMode=dState.mode;
+    dState.mode=5;
     resetMode();
     sendCommand("q5.picc=1");
 }
 
 void Touchscreen::playPushCallback(void *ptr){
-    if (CountdownTimer::active()) {
-        sendCommand("b3.picc=0");
-        countdown.stop();
-    } else{
-        sendCommand("b3.picc=1");
-        countdown.start();
-    }
+  if (dState.timerStarted){
+    Mesh.publish("setTimerStop");
+    sendCommand("b3.picc=0");
+  } else{
+    Mesh.publish("setTimerStart");
+    sendCommand("b3.picc=1");
+  }
+  dState.timerStarted = !dState.timerStarted;
 }
 
 void Touchscreen::restartPushCallback(void *ptr){
-    CountdownTimer::reset();  
-    sendCommand(countdown.getClockText());
+    Mesh.publish("setTimerReset");
     sendCommand("b1.picc=1");
 }
 
