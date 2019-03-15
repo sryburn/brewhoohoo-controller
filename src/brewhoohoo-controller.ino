@@ -29,6 +29,8 @@ void setup() {
   Serial1.begin(115200);
   setupEncoder();
   touchscreen.attachCallbacks();
+  dState.mode=0;
+  touchscreen.sendCommand("q0.picc=1");
   attachInterrupts();
   waitUntil(Mesh.ready);
   Mesh.subscribe("status", renderUpdatedState);
